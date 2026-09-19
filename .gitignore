@@ -1,0 +1,10 @@
+# Virtual environments, caches and local env files
+.venv/
+venv/
+__pycache__/
+*.pyc
+.pytest_cache/
+.env
+.env.*
+!.env.example
+.ruff_cache/

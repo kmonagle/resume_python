@@ -1,0 +1,22 @@
+# Why this file exists: tool configuration only (this is a service, not a
+# library, so there is no packaging metadata).
+#
+# JS/TS vs Python: pyproject.toml is Python's modern equivalent of the config
+# sections in package.json. Dependencies live in requirements.txt (like a
+# lockfile you write by hand); here we just configure pytest.
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+# "auto" lets plain `async def test_...` functions run without a decorator.
+asyncio_mode = "auto"
+
+# JS/TS vs Python: Ruff is ESLint + Prettier in one fast tool (`ruff check` lints,
+# `ruff format` formats; there is no separate config file). E501 (line too long)
+# is ignored because the formatter already wraps code, and only comments and
+# docstrings can exceed the limit.
+[tool.ruff]
+line-length = 100
+target-version = "py313"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B", "SIM", "ASYNC"]
+ignore = ["E501"]
