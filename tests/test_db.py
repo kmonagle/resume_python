@@ -5,6 +5,9 @@ engine_settings() makes, so a change can't quietly break production.
 
 from app.db import engine_settings
 
+# JS/TS vs Python: a test module is just functions named `test_*`; pytest imports the file and
+# runs them. There is no `describe` block and no setup boilerplate, and a test passes unless
+# an `assert` fails or an exception escapes.
 NEON = "postgres://user:pw@ep-x-pooler.neon.tech/db?sslmode=require&channel_binding=require"
 
 
@@ -31,4 +34,6 @@ def test_prepared_statements_are_disabled_for_pgbouncer():
     assert args["statement_cache_size"] == 0
     assert args["prepared_statement_cache_size"] == 0
     # Every statement gets a unique name, so PgBouncer never sees a name collision.
+    # JS/TS vs Python: functions are first-class objects stored in a dict, and calling one
+    # is `fn()`. Two calls returning different values proves each name is unique.
     assert args["prepared_statement_name_func"]() != args["prepared_statement_name_func"]()

@@ -92,6 +92,11 @@ class Service:
     def __init__(
         self,
         store: Store,
+        # JS/TS vs Python: DEFAULT ARGUMENTS ARE EVALUATED ONCE, when the function is
+        # defined, not on each call (JS re-evaluates them every call). That is harmless
+        # here because the default is a lambda, which computes the time when CALLED. The
+        # classic Python trap is a mutable default such as `def f(items=[])`: that one
+        # list is shared by every call. Use `None` and create the list inside instead.
         clock: Callable[[], datetime] = lambda: datetime.now(UTC),
     ) -> None:
         self._store = store

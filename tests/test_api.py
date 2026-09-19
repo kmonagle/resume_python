@@ -53,6 +53,8 @@ def test_authentication_is_checked_before_the_body_is_validated():
     assert client().post("/links", json={"targetUrl": "nope"}).status_code == 401
 
 
+# JS/TS vs Python: the `|` operator MERGES two dicts (Python 3.9+), the same job as
+# `{ ...AUTH, "X-Owner-Id": "o" }` in JS. The right-hand side wins on a clash.
 def test_validation_errors_use_the_contracts_shape():
     response = client().post(
         "/links", json={"targetUrl": "javascript:alert(1)"}, headers=AUTH | {"X-Owner-Id": "o"}

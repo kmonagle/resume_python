@@ -39,6 +39,11 @@ def _blank(value: Any) -> bool:
     return value is None or (isinstance(value, str) and value.strip() == "")
 
 
+# JS/TS vs Python: the `re` module has THREE ways to apply a pattern, and mixing them up
+# is a common bug. `re.match` anchors only at the START, `re.search` finds it anywhere, and
+# `re.fullmatch` requires the WHOLE string to match. JS's `^...$` habit is replaced by
+# fullmatch here, which is why these patterns have no anchors. (A raw string, `r"..."`,
+# stops backslashes being treated as escapes, so `\d` reaches the regex engine intact.)
 _SHORT_CODE = re.compile(r"[A-Za-z0-9_-]{3,32}")
 # Requires an explicit UTC offset (or Z), so the moment is unambiguous.
 _RFC3339 = re.compile(r"\d{4}-\d{2}-\d{2}[Tt ]\d{2}:\d{2}:\d{2}(\.\d{1,6})?([Zz]|[+-]\d{2}:\d{2})")
@@ -107,6 +112,9 @@ class CreateLink(CamelModel):
             # handling is explicit: this one is AWARE (it carries the offset).
             parsed = datetime.fromisoformat(text)
         except ValueError:
+            # JS/TS vs Python: raising inside `except` normally CHAINS the original
+            # exception (its traceback is shown too). `from None` drops it, since the
+            # user-facing message is all we want here.
             raise ValueError("Enter a valid date and time") from None
         if parsed <= datetime.now(UTC):
             raise ValueError("Expiry must be in the future")

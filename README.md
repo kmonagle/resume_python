@@ -13,7 +13,9 @@ Read this README for how the services fit together and why the design is the way
 it is. Read the code for the Python:
 every file opens with a docstring on why it exists, and comments tagged
 **`JS/TS vs Python:`** call out where Python behaves differently from what a
-JavaScript/TypeScript developer would expect (`grep -rn "JS/TS vs Python" .`).
+JavaScript/TypeScript developer would expect (`grep -rn "JS/TS vs Python" .`). A ten-point crib
+sheet of the biggest differences (indentation, `None`, hints that aren't enforced, `self`, the
+event loop...) is in the docstring of `app/__init__.py`.
 
 > The integration story (browser → Next.js → backend → Postgres, the token, the
 > redirect flow, cold starts, the shared database) is identical for every backend.
@@ -107,24 +109,110 @@ Two things specific to this implementation:
   fails the `WHERE` clause. The contract suite fires 12 requests in parallel at a
   limit-2 link and expects exactly 2 redirects.
 
-## What Next.js does when this service misbehaves
+### One request, end to end
 
-Next.js validates every response with zod and maps outcomes: `201` → created; `409`
-→ "code taken" (a form field error); `429` → "limit reached" (this service's
-message is shown); `404` on toggle → not found; `404`/`410` on a redirect → passed
-through; `401` → a misconfigured token (logged, shown as "backend unavailable");
-`5xx`, invalid JSON or a timeout → "backend unavailable". That becomes a `503` from
-the JSON API, a "waking up, try again" message on the form, a `503` +
-`Retry-After` on a short link, and "live updates paused" on the dashboard.
+What happens to a `POST /links` from the moment it arrives (the shape is the same for every
+route; the redirect adds a background task at the end):
+
+```
+Next.js ── POST /links ──► uvicorn accepts the connection and parses the HTTP request
+                            │
+                            ▼  FastAPI matches the route, then resolves its dependencies:
+                            │    require_owner  → 401 / 400 here if the token or owner header
+                            │                     is wrong (before the body is even looked at)
+                            │    get_session    → opens a database session; BEGIN a transaction
+                            │    get_store → get_service → SqlAlchemyStore(session), Service(store)
+                            ▼
+                            │  the JSON body is parsed and validated into CreateLink;
+                            │  a bad body ends here as a 400 (the session is rolled back)
+                            ▼
+                            │  create_link() runs: Service.create → cleanup DELETE, two COUNTs,
+                            │  INSERT: all in the one transaction
+                            ▼
+                            │  the route returns a LinkDTO; FastAPI serialises it (camelCase
+                            │  JSON, status 201)
+                            ▼
+                            │  get_session's teardown COMMITs   ← scope="function": this happens
+                            │                                     BEFORE the response is sent
+                            ▼
+Next.js ◄── 201 + JSON ─────┘   (for a redirect, the BackgroundTask runs now, in its own session)
+```
+
+### How Next.js calls this service
+
+The Next.js side of the conversation is `src/server/link-api/remote.ts`. What it does, and so
+what this service has to uphold:
+
+- **Every call to `/links`** carries `Authorization: Bearer <token>` and `X-Owner-Id`, uses
+  `cache: "no-store"` (live data must never be cached by Next's fetch layer), and has a 90-second
+  timeout (a free-tier cold start is a slow request, not an error).
+- **Redirects** use `redirect: "manual"`, because the caller wants this service's `Location`
+  header itself and not the destination site's HTML. It forwards the visitor's `Referer` and
+  `User-Agent` so the click log holds the real browser. `GET /r/{code}` needs no token.
+- **Responses are validated with zod against the contract**, not trusted. So the shape has to be
+  exact: camelCase keys, timestamps as ISO strings with milliseconds and a `Z`, nullable fields sent
+  as `null` (never omitted), and `status` one of `active | expired | max_clicks | disabled`. The
+  `LinkDTO` response model and its camel-case aliases are what guarantee that here. A response that
+  breaks the contract is treated by Next.js as "backend unavailable".
+- **Errors are mapped by status code** (table below), so returning the *right* status matters
+  more than the message text, with one exception: a `410` body is shown to the visitor as-is, and
+  `429`'s message is shown on the form.
+- **The footer's "Served by" line** comes from `GET /meta` (via Next.js's own `/api/meta`), which
+  is why `/meta` is open and never touches the database.
+
+### What Next.js does when this service misbehaves
+
+| This service answers | Next.js treats it as |
+|---|---|
+| `201` on create | success |
+| `409` on create | "that code is taken" (a field error on the form) |
+| `429` on create | "limit reached" (this service's message is shown) |
+| `404` on toggle | link not found (someone else's, or it doesn't exist) |
+| `404` / `410` on a redirect | Next's 404 page / a `410` with this service's message |
+| `401` | a misconfigured token: logged on the Next.js side, surfaced as "backend unavailable" |
+| `5xx`, invalid JSON, or a timeout | "backend unavailable" |
+
+"Backend unavailable" becomes: a `503` from the JSON API; a "waking up, try again" message on the
+form (which keeps what you typed); a `503` with `Retry-After: 30` on a short link; and "live
+updates paused" on the dashboard, which keeps polling and recovers by itself.
 
 ## Free-tier cold starts (Render)
 
-A free service sleeps after 15 idle minutes and takes about a minute to wake. With
-Next.js in front, both can be asleep, so Next.js pings this service's `/meta` when
-it starts (fire-and-forget) so the two wake in parallel, and uses a 90-second
-timeout. A free workspace gets about 750 instance-hours a month: one always-on
-service uses ~730, so don't try to keep two awake. `LINK_BACKEND=local` needs no
-second service at all.
+On Render's free plan a service sleeps after 15 minutes without traffic and takes about a minute
+to wake. With Next.js in front of this service **both can be asleep**, and naïvely they would wake
+one after the other (Next.js wakes, then calls this service, which wakes: about two minutes). What
+the Next.js side does about it:
+
+- **Warm-up in parallel.** `src/instrumentation.ts` in the Next.js repo pings this service's
+  `/meta` as soon as Next.js starts (fire-and-forget, never awaited, because Next waits for that
+  hook before accepting requests), so this service begins waking while Next.js is still booting.
+- **A 90 second timeout** on every call, so a cold start is a slow request instead of an error.
+- **The footer never blocks a page.** With a remote backend the "Served by" line is fetched by
+  the browser after load.
+- **Don't try to keep both awake.** A free workspace gets about 750 instance-hours a month. One
+  always-on service uses about 730; two would run out mid-month.
+- `LINK_BACKEND=local` needs no second service at all.
+
+On this side, `/meta` is the health check and doesn't touch the database, so the service reports
+healthy the moment uvicorn is up; the first real query then opens a connection (and Neon's own
+compute may also be waking, which adds a second or two).
+
+## Startup, shutdown and scaling
+
+- **Start:** the image runs `uvicorn app.main:create_app --factory`. `create_app` reads and
+  validates the settings (a bad one stops the process with a clear message), then builds the app
+  and a *lazy* database engine: nothing connects until the first query.
+- **Port:** Render injects `PORT`; the Dockerfile's `CMD` passes it to uvicorn (default `8080`).
+- **Stop:** Render sends `SIGTERM` on a redeploy. Uvicorn stops accepting connections, lets
+  in-flight requests finish, then runs the shutdown half of the app's `lifespan`, which closes
+  every pooled database connection.
+- **One worker, five connections.** A single uvicorn process is one event loop on one thread, and
+  the GIL means Python code can't run in parallel within a process; so the pattern is Node's:
+  `await` slow I/O and never block the loop. To use more CPU cores you would run more processes
+  (`--workers N`), which isn't needed on the free tier. The database pool is `pool_size=5,
+  max_overflow=0`, so at most five queries run at once and the rest wait for a free connection
+  (the parallel-click contract test fires 12 at once, so seven of them queue for a
+  connection, which works because each request's transaction ends before its response is sent).
 
 ## The shared database
 
@@ -159,28 +247,38 @@ this service, and runs the shared suite against it. To upgrade, bump the tag, ma
 the new tests pass, and merge; other backends can stay on the old tag meanwhile, so
 prefer *additive* contract changes.
 
-**FastAPI writes its own OpenAPI document** (`/docs`, `/openapi.json`) from the route
-signatures. It is a handy live reference, but it is *derived from this code* and is
-not the contract: the hand-written spec in the Next.js repo is the source of truth,
-and the contract tests are what prove this service matches it. Two places where
-FastAPI's defaults disagreed with the contract and had to be overridden
-(`app/api.py`): validation failures answer `422` with `{"detail": [...]}` by
-default (the contract says `400` with `{"error", "fieldErrors"}`), and HTTP errors
-use `{"detail": ...}` (the contract says `{"error": ...}`).
+**FastAPI writes its own OpenAPI document** (`/docs`, `/openapi.json`) from the route signatures.
+It is a handy live reference, but it is *derived from this code* and is not the contract: the
+hand-written spec in the Next.js repo is the source of truth, and the contract tests are what prove
+this service matches it.
 
-### Three implementations, side by side
+**Where a framework default disagreed with the contract** (each one is a place the tests would
+fail, and each is fixed and commented in the code):
 
-| Python (this repo) | Go (`resume_go`) | Next.js (`resume_nextjs`) | Job |
-|---|---|---|---|
-| `app/store.py`, `app/models.py` | `internal/store` | `link-repository.ts`, `schema.ts` | the only code that runs queries; the table definitions |
-| `app/service.py` | `internal/service` | `link-api/local.ts` | limits, retention, codes, 404 vs 410 |
-| `app/api.py` | `internal/api` | `src/app/api/**`, `src/app/r/**` | HTTP handlers |
-| `app/schemas.py` | `internal/link/validate.go` | `link-schema.ts` | input validation, wire format |
-| `app/domain.py` | `internal/link/link.go` | `link-status.ts` | "is this link usable?" |
-| `app/config.py`, `app/db.py` | `internal/config` | `env.ts`, `db/client.ts` | environment variables; connecting to Postgres |
+| Default behaviour | What the contract needs | How it is handled |
+|---|---|---|
+| Validation failures answer `422` with `{"detail": [...]}` | `400` with `{"error", "fieldErrors"}` | `handle_validation_error` in `app/api.py` |
+| HTTP errors answer `{"detail": "..."}` | `{"error": "..."}` | `handle_http_exception` |
+| An unhandled exception gives a plain-text 500 | a JSON `{"error"}` with nothing internal | `handle_unexpected` |
+| pydantic coerces `"yes"` or `1` to `true` | only a real JSON boolean | `StrictBool` in `app/schemas.py` |
+| datetime parsing accepts date-only and many other formats | RFC 3339 with an explicit offset | custom validator + regex |
+| A `yield` dependency's cleanup runs *after* the response is sent | commit *before* the response | `Depends(..., scope="function")` |
+| `BackgroundTasks` are dropped when you return your own `Response` | the click must be logged | `Response(..., background=...)` |
 
-The trade-offs are visible in numbers: this image is ~270 MB (the Python runtime and
-its packages ship with it) against ~20 MB for Go's single static binary.
+### Four implementations, side by side
+
+| Python (this repo) | Go (`resume_go`) | C# (`resume_csharp`) | Next.js (`resume_nextjs`) | Job |
+|---|---|---|---|---|
+| `app/store.py`, `app/models.py` | `internal/store` | `Data/EfLinkStore.cs`, `LinksDbContext.cs` | `link-repository.ts`, `schema.ts` | the only code that runs queries; the table definitions |
+| `app/service.py` | `internal/service` | `Services/LinkService.cs` | `link-api/local.ts` | limits, retention, codes, 404 vs 410 |
+| `app/api.py` | `internal/api` | `Endpoints/` | `src/app/api/**`, `src/app/r/**` | HTTP handlers, auth |
+| `app/schemas.py` | `internal/link/validate.go` | `Contracts/` | `link-schema.ts` | input validation, wire format |
+| `app/domain.py` | `internal/link/link.go` | `Domain/` | `link-status.ts` | "is this link usable?" |
+| `app/config.py`, `app/db.py` | `internal/config` | `Configuration/` | `env.ts`, `db/client.ts` | environment variables; connecting to Postgres |
+
+The trade-offs are visible in numbers: this image is ~270 MB (the Python runtime and its
+packages ship with it), against ~380 MB for C# (which carries the .NET runtime) and ~20 MB for
+Go's single static binary.
 
 ## Environment variables
 

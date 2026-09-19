@@ -1,3 +1,9 @@
+# Why this file exists: the production dependencies, pinned to exact versions.
+#
+# JS/TS vs Python: this is package.json's "dependencies" and the lockfile's job in one file.
+# `==` pins an exact version (npm's default is a `^` range), and there is no automatic
+# lockfile: only these direct dependencies are pinned, and pip resolves the rest. They are
+# installed into a virtual environment or, here, straight into the Docker image.
 fastapi==0.141.1
 uvicorn[standard]==0.53.0
 sqlalchemy[asyncio]==2.0.54

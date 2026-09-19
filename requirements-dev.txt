@@ -1,3 +1,8 @@
+# Why this file exists: everything needed to develop and test, on top of production.
+#
+# JS/TS vs Python: this is devDependencies. `-r requirements.txt` INCLUDES another file, so
+# a developer installs one command (`pip install -r requirements-dev.txt`) and gets both
+# sets, while the production image installs only the first.
 -r requirements.txt
 pytest==9.1.1
 pytest-asyncio==1.4.0

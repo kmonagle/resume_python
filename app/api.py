@@ -35,6 +35,11 @@ from app.service import (
 )
 from app.store import SqlAlchemyStore
 
+# JS/TS vs Python: the `logging` module replaces `console.log`. A logger is named after the
+# module (`__name__`, the module's dotted name: a built-in variable), so log lines say where
+# they came from, and levels (`.info`, `.error`, `.exception`) can be filtered by uvicorn's
+# configuration. `logger.exception(...)` also prints the traceback of the exception being
+# handled.
 logger = logging.getLogger(__name__)
 
 IMPLEMENTATION = "Python FastAPI + SQLAlchemy"
@@ -111,6 +116,9 @@ async def log_click(
     try:
         async with sessionmaker() as session, session.begin():
             await Service(SqlAlchemyStore(session)).record_click(link_id, referrer, user_agent)
+    # JS/TS vs Python: `except Exception` is `catch (e)`. Catching the base class is
+    # normally too broad, but a background task has nobody to report to, so it must not
+    # crash the worker. (`except:` with no class would also swallow Ctrl+C: avoid it.)
     except Exception:
         logger.exception("recording click event failed")
 
@@ -134,6 +142,10 @@ async def require_owner(request: Request) -> str:
     # always 32 bytes (so length leaks nothing), and compare_digest takes the same
     # time whatever the input, so response timing can't be used to guess the token
     # byte by byte, which a plain `==` would allow.
+    # JS/TS vs Python: `header[len(prefix):]` is a SLICE, like `header.slice(n)`. The
+    # syntax is `[start:stop]`, either end may be omitted, and negative numbers count
+    # from the end (`s[-3:]` is the last three characters). `.encode()` turns the string
+    # into bytes, which the hash function requires (strings and bytes are different types).
     presented = hashlib.sha256(header[len(prefix) :].encode()).digest()
     if not hmac.compare_digest(presented, request.app.state.token_hash):
         raise HTTPException(status_code=401, detail="Missing or invalid bearer token")
@@ -227,6 +239,8 @@ async def follow_link(
             )
             return Response(
                 status_code=307,
+                # JS/TS vs Python: `**NO_STORE` UNPACKS a dict into another, exactly like
+                # object spread `{ Location: target, ...NO_STORE }` in JS.
                 headers={"Location": target, **NO_STORE},  # never cache: every hit must claim
                 background=background,
             )

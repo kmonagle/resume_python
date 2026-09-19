@@ -8,6 +8,14 @@ module plus a process runner) is started from the command line and told where to
 find the app:  `uvicorn app.main:create_app --factory`. It handles signals too: on
 SIGTERM (how Render stops a service) it finishes in-flight requests and then runs
 the shutdown half of `lifespan` below.
+
+JS/TS vs Python: CONCURRENCY. One uvicorn process runs one asyncio event loop on one thread,
+much like Node. Python code also runs under the GIL (global interpreter lock), so even
+threads can't execute Python in parallel; there is no worker-thread pool as in Java or Go.
+The pattern is therefore the same as Node's: `await` all the slow I/O (the database driver
+here is async for that reason) and never block the loop, and scale across CPU cores by running
+several PROCESSES (`uvicorn --workers N`). On Render's free tier one small process is plenty,
+so this service runs a single worker, and its database pool is sized to match.
 """
 
 import hashlib
