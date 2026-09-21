@@ -2,8 +2,9 @@
 DATABASE_URL we are given into what SQLAlchemy's async engine needs, and building
 the engine and session factory. Queries live in store.py; this is only plumbing.
 
-JS/TS vs Python: this is the counterpart of src/server/db/client.ts in the
-Next.js repo. Same jobs, same Neon quirks, different library.
+JS/TS vs Python: this is what a Node app would do with a Drizzle or
+postgres.js client setup (the Next.js app holds no data, so it has none). Same jobs,
+same Neon quirks, different library.
 """
 
 import uuid

@@ -1,6 +1,6 @@
 """Why this file exists: the request and response shapes, and the validation
 rules for user input (the trust boundary). The rules and messages match
-docs/openapi.yaml and the Next.js and Go implementations, because the contract
+docs/openapi.yaml and the other backends, because the contract
 tests hold every backend to the same behaviour.
 
 JS/TS vs Python: this is the counterpart of src/shared/schemas/link-schema.ts

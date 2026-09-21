@@ -3,8 +3,9 @@
 audited against the shared schema, in one place. The schema is owned by the
 Next.js repo's migrations; this service never migrates.
 
-JS/TS vs Python: this is the counterpart of link-repository.ts (Drizzle) in the
-Next.js repo. SQLAlchemy 2.0 is Python's standard database toolkit: it is both an
+JS/TS vs Python: this is the only code that runs queries (the Next.js
+app holds no data, so there is no counterpart there; compare a typical Drizzle or
+Prisma data layer in a Node app). SQLAlchemy 2.0 is Python's standard database toolkit: it is both an
 ORM (mapped classes, sessions) and a SQL expression language (`select(...)`,
 `update(...)`). The statements below are built from Python objects, not SQL
 strings, so a typo in a column name is an AttributeError at the point of writing.
@@ -117,8 +118,8 @@ class SqlAlchemyStore:
         In a single UPDATE, Postgres locks the row: the second request waits, then
         re-evaluates the WHERE clause against the already-incremented row (10) and
         matches nothing. The database enforces the limit however many instances or
-        languages are calling it. Must stay identical to the Next.js and Go
-        implementations.
+        languages are calling it. Must stay identical to the other
+        backends.
 
         Returns (link id, target url), or None when the link is missing or no
         longer redeemable.

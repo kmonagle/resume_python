@@ -1,13 +1,13 @@
 # resume_python — the link backend, in Python (FastAPI)
 
-A third implementation of the short-link API. The Next.js app in
-[`resume_nextjs`](https://github.com/kmonagle/resume_nextjs) can serve links itself
-out of its own code, and the [Go service](https://github.com/kmonagle/resume_go) does
-the same job; this one does it in Python. All three are held to the **identical
-contract test suite**, which is the point: the contract, not the language, defines
-the system.
+One of four backends for the short-link API (Go, Python, C#, Java); this one is
+Python. The Next.js app in [`resume_nextjs`](https://github.com/kmonagle/resume_nextjs)
+is the UI/BFF and does not serve links itself: it always calls one of the backends.
+All four are held to the **identical contract test suite**, which is the point: the
+contract, not the language, defines the system. For the side-by-side overview, see
+[Start here](https://github.com/kmonagle/resume_nextjs#start-here).
 
-**Implements contract `contract-v1`** (the tag pinned in `.github/workflows/ci.yml`).
+The contract is `docs/openapi.yaml` in `resume_nextjs`.
 
 Read this README for how the services fit together and why the design is the way
 it is. Read the code for the Python:
@@ -39,9 +39,8 @@ event loop...) is in the docstring of `app/__init__.py`.
   there is no CORS or cross-site-cookie problem, and the bearer token and this
   service's URL never reach client JavaScript. Next.js is a **BFF**
   (backend-for-frontend).
-- Next.js picks its backend with an environment variable, `LINK_BACKEND`:
-  **`local`** (its own Drizzle code) or **`remote`** (call one of these services, at
-  `LINK_BACKEND_URL`). Point it at Go or at Python and the UI can't tell.
+- Next.js finds its backend through `LINK_BACKEND_URL` (plus `LINK_BACKEND_TOKEN`).
+  Point it at any of the four backends and the UI can't tell.
 - **All backends share one Postgres database**, so links carry across them.
 
 ### Who owns what
@@ -49,11 +48,11 @@ event loop...) is in the docstring of `app/__init__.py`.
 | Concern | Owner |
 |---|---|
 | UI, dashboard polling, forms, the visitor cookie | Next.js |
-| Input validation | **Both**: Next validates first (fast form errors); this service validates again because it must not trust its caller. Rules and messages match. |
-| Business rules (limits, retention, 404 vs 410), atomic click counting | **Every backend**, with the same behaviour |
-| Click event logging | Whoever serves the redirect (here). Next.js must not log too or clicks double count. |
+| Input validation | Next.js does first-line form validation (zod, fast form errors); this service validates again because it must not trust its caller. Rules and messages match. |
+| Business rules (limits, retention, 404 vs 410), atomic click counting | This service (every backend does the same) |
+| Click event logging | This service. |
 | **Database schema and migrations** | **The Next.js repo.** This service never migrates. |
-| The contract (OpenAPI spec + tests) | The Next.js repo, pinned by tag |
+| The contract (OpenAPI spec + tests) | The Next.js repo (CI here checks out its `main`) |
 
 ### How each Next.js feature becomes calls to this service
 
@@ -193,7 +192,6 @@ so the two would wake together; that was removed because server-to-server reques
 
 - **Don't try to keep everything awake.** A free workspace gets about 750 instance-hours a month. One
   always-on service uses about 730; two would run out mid-month.
-- `LINK_BACKEND=local` needs no second service at all.
 
 On this side, `/meta` is the health check and doesn't touch the database, so the service reports
 healthy the moment uvicorn is up; the first real query then opens a connection (and Neon's own
@@ -243,11 +241,15 @@ compute may also be waking, which adds a second or two).
 ## The contract
 
 `docs/openapi.yaml` in the Next.js repo is the source of truth. `.github/workflows/ci.yml`
-here pins the version this service implements (`CONTRACT_REF: contract-v1`, a git
-tag); CI checks it out, applies its `drizzle/*.sql` to a throwaway Postgres, starts
-this service, and runs the shared suite against it. To upgrade, bump the tag, make
-the new tests pass, and merge; other backends can stay on the old tag meanwhile, so
-prefer *additive* contract changes.
+here checks out that repo at `main` (`CONTRACT_REF: main`), applies its `drizzle/*.sql` to a
+throwaway Postgres, starts this service, and runs the shared suite against it (the suite also
+runs through Next.js in front of this backend, in the Next.js CI `remote` matrix). A contract
+change turns this CI red until this backend is updated. The trade-off is that CI depends on the
+contract's current state, which is fine for one owner.
+
+**One documented difference:** when a request has no token *and* an invalid body, this service
+answers `400`, not `401`, because FastAPI parses the body before running the auth check. It is
+listed in the known-differences table of the [overview](https://github.com/kmonagle/resume_nextjs#start-here).
 
 **FastAPI writes its own OpenAPI document** (`/docs`, `/openapi.json`) from the route signatures.
 It is a handy live reference, but it is *derived from this code* and is not the contract: the
@@ -267,20 +269,20 @@ fail, and each is fixed and commented in the code):
 | A `yield` dependency's cleanup runs *after* the response is sent | commit *before* the response | `Depends(..., scope="function")` |
 | `BackgroundTasks` are dropped when you return your own `Response` | the click must be logged | `Response(..., background=...)` |
 
-### Four implementations, side by side
+### The backends, side by side
 
-| Python (this repo) | Go (`resume_go`) | C# (`resume_csharp`) | Next.js (`resume_nextjs`) | Job |
+| Python (this repo) | Go (`resume_go`) | C# (`resume_csharp`) | Java (`resume_java`) | Job |
 |---|---|---|---|---|
-| `app/store.py`, `app/models.py` | `internal/store` | `Data/EfLinkStore.cs`, `LinksDbContext.cs` | `link-repository.ts`, `schema.ts` | the only code that runs queries; the table definitions |
-| `app/service.py` | `internal/service` | `Services/LinkService.cs` | `link-api/local.ts` | limits, retention, codes, 404 vs 410 |
-| `app/api.py` | `internal/api` | `Endpoints/` | `src/app/api/**`, `src/app/r/**` | HTTP handlers, auth |
-| `app/schemas.py` | `internal/link/validate.go` | `Contracts/` | `link-schema.ts` | input validation, wire format |
-| `app/domain.py` | `internal/link/link.go` | `Domain/` | `link-status.ts` | "is this link usable?" |
-| `app/config.py`, `app/db.py` | `internal/config` | `Configuration/` | `env.ts`, `db/client.ts` | environment variables; connecting to Postgres |
+| `app/store.py`, `app/models.py` | `internal/store` | `Data/EfLinkStore.cs`, `LinksDbContext.cs` | `persistence/` | the only code that runs queries; the table definitions |
+| `app/service.py` | `internal/service` | `Services/LinkService.cs` | `service/LinkService` | limits, retention, codes, 404 vs 410 |
+| `app/api.py` | `internal/api` | `Endpoints/` | `web/LinkController`, `web/AuthInterceptor` | HTTP handlers, auth |
+| `app/schemas.py` | `internal/link/validate.go` | `Contracts/` | `web/CreateLinkValidator`, `LinkDto` | input validation, wire format |
+| `app/domain.py` | `internal/link/link.go` | `Domain/` | `domain/` | "is this link usable?" |
+| `app/config.py`, `app/db.py` | `internal/config` | `Configuration/` | `config/` | environment variables; connecting to Postgres |
 
 The trade-offs are visible in numbers: this image is ~270 MB (the Python runtime and its
-packages ship with it), against ~380 MB for C# (which carries the .NET runtime) and ~20 MB for
-Go's single static binary.
+packages ship with it), against ~380 MB for C# (which carries the .NET runtime), ~400 MB for Java
+and ~20 MB for Go's single static binary.
 
 ## Environment variables
 
@@ -289,7 +291,7 @@ Go's single static binary.
 | `DATABASE_URL` | this service | Postgres URL. Use Neon's **pooled** URL in production. |
 | `LINK_BACKEND_TOKEN` | this service **and** Next.js | Shared secret, 16+ characters. **Must be identical on both.** |
 | `PORT` | this service | Render sets it; the Dockerfile defaults to `8080`. |
-| `LINK_BACKEND=remote`, `LINK_BACKEND_URL` | Next.js | Point Next.js at this service's public URL. |
+| `LINK_BACKEND_URL` | Next.js | Point Next.js at this service's public URL. |
 
 ## Run it locally
 
@@ -309,7 +311,7 @@ docker run --rm -p 8080:8080 \
 #    DATABASE_URL=... LINK_BACKEND_TOKEN=... uvicorn app.main:create_app --factory --reload
 
 # 3. Next.js in front of it (from ../resume_nextjs)
-LINK_BACKEND=remote LINK_BACKEND_URL=http://localhost:8080 \
+LINK_BACKEND_URL=http://localhost:8080 \
 LINK_BACKEND_TOKEN=local-dev-token-0123456789 npm run dev
 ```
 
@@ -329,7 +331,7 @@ CONTRACT_API_PREFIX="" CONTRACT_TOKEN=local-dev-token-0123456789 npm run test:co
 
 Create a **Web Service** from this repo, runtime **Docker**, and set `DATABASE_URL`
 (the Neon **pooled** URL) and `LINK_BACKEND_TOKEN`. Render provides `PORT`. Set the
-health check path to `/meta`. To use it, set `LINK_BACKEND=remote`,
+health check path to `/meta`. To use it, set
 `LINK_BACKEND_URL` and the same `LINK_BACKEND_TOKEN` on the Next.js service. Setting
 **Auto-Deploy** to "After CI Checks Pass" keeps a broken push out of production.
 
@@ -345,7 +347,7 @@ health check path to `/meta`. To use it, set `LINK_BACKEND=remote`,
 | Clicks never appear in `click_events` | The redirect stopped passing `background=` to its `Response`, or the task is failing (see the logs). |
 | Requests hang for ~30 s under concurrent clicks | The session dependency lost `scope="function"`: see "Design decisions". |
 | Clicks counted twice | Something else is also logging click events. |
-| CI can't check out the contract | The tag isn't pushed, the Next.js repo is private, or `CONTRACT_REPO` is wrong. |
+| CI can't check out the contract | The Next.js repo is private, or `CONTRACT_REPO` is wrong. |
 
 ## Layout
 
@@ -397,19 +399,19 @@ challenged.
 - **The route → service → store split, even though the ORM could do it all in the
   route.** The service holds the rules (limits, retries, 404 vs 410) with no HTTP or
   SQL in it, so it is tested against a hand-written fake. The layering also mirrors
-  the Go and Next.js implementations, which makes the three easy to compare.
+  the Go implementation, which makes the two easy to compare.
 - **The store is a `Protocol`,** so the service depends on a shape, not on
   SQLAlchemy. Tests pass a small fake; no mocking library.
 - **Expected outcomes are values.** `Created | CodeTaken | LimitReached` is a union
   matched with `match`, and only genuine failures are exceptions.
 - **Validation is the type.** A `CreateLink` parameter means the body was parsed and
   validated before the route runs. Custom validators (not just `Field` constraints)
-  are used so error messages match the other two implementations word for word.
+  are used so error messages match the other backends word for word.
 - **Domain objects, not ORM objects, leave the store.** Mapping rows to plain
   dataclasses keeps the ORM from leaking upward (no accidental lazy loading, no
   session held open by a stray object).
 - **Settings are validated once, at startup,** and the app is built by a factory, so
   importing it has no side effects and tests build one with no database (using
   `dependency_overrides`).
-- **The contract is pinned and tested,** so "same behaviour in three languages" is
+- **The contract is tested against `main`,** so "same behaviour in four languages" is
   checked on every push, not just claimed.

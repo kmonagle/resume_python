@@ -1,8 +1,8 @@
 """Why this file exists: the business rules, between HTTP (api) and SQL (store):
 demo size limits, retention cleanup, short-code generation with retry, and how a
-redirect decides 404 vs 410. It is the Python counterpart of the Next.js app's
-local adapter (src/server/link-api/local.ts) and of internal/service in the Go
-repo, and the contract tests hold all three to the same behaviour.
+redirect decides 404 vs 410. It is the Python counterpart of internal/service in the Go
+repo (and its C# and Java equivalents), and the contract tests hold all the
+backends to the same behaviour.
 """
 
 from collections.abc import Callable

@@ -1,14 +1,15 @@
 # Why this file exists: proves this service satisfies the shared contract on
 # every push. It runs the Python tests, then runs the SAME contract suite that
-# the Next.js and Go implementations pass, against this service, using a
-# throwaway Postgres whose schema comes from the pinned contract version.
+# the other backends pass, against this service, using a throwaway Postgres
+# whose schema comes from the contract's current `main`.
 name: CI
 on: [push, pull_request]
 
 env:
-  # The one line to change to adopt a newer contract version.
+  # The contract is checked out at the Next.js repo's current `main`, so a contract
+  # change turns this CI red until this service is updated.
   CONTRACT_REPO: kmonagle/resume_nextjs
-  CONTRACT_REF: contract-v1
+  CONTRACT_REF: main
   TEST_TOKEN: ci-token-0123456789abcdef
 
 jobs:
@@ -35,14 +36,15 @@ jobs:
       - run: ruff format --check .
       - run: pytest -q
 
-      # The contract lives in the Next.js repo, pinned to a tag.
+      # The contract lives in the Next.js repo; we check out its current `main`, so a
+      # contract change turns this CI red until this service is updated.
       - uses: actions/checkout@v4
         with:
           repository: ${{ env.CONTRACT_REPO }}
           ref: ${{ env.CONTRACT_REF }}
           path: contract
 
-      # This service never migrates; create the tables from the pinned SQL.
+      # This service never migrates; create the tables from the contract's SQL.
       - name: Apply the contract's migrations
         run: |
           for f in contract/drizzle/*.sql; do
