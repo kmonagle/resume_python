@@ -178,18 +178,20 @@ updates paused" on the dashboard, which keeps polling and recovers by itself.
 
 ## Free-tier cold starts (Render)
 
-On Render's free plan a service sleeps after 15 minutes without traffic and takes about a minute
-to wake. With Next.js in front of this service **both can be asleep**, and naïvely they would wake
-one after the other (Next.js wakes, then calls this service, which wakes: about two minutes). What
-the Next.js side does about it:
+On Render's free plan a service sleeps after 15 minutes without traffic and takes from about ten
+seconds to a minute to wake (measured on Render: Go and C# about 12 s, Python about 22 s; the JVM is
+the slowest).
 
-- **Warm-up in parallel.** `src/instrumentation.ts` in the Next.js repo pings this service's
-  `/meta` as soon as Next.js starts (fire-and-forget, never awaited, because Next waits for that
-  hook before accepting requests), so this service begins waking while Next.js is still booting.
-- **A 90 second timeout** on every call, so a cold start is a slow request instead of an error.
-- **The footer never blocks a page.** With a remote backend the "Served by" line is fetched by
-  the browser after load.
-- **Don't try to keep both awake.** A free workspace gets about 750 instance-hours a month. One
+**Only a public request wakes it.** A request from the Next.js service to a sleeping backend (both on
+Render) gets Render's HTML `502` page straight away and does **not** wake the service, so the UI shows
+a "waking up" state and stays there; a request from a browser or `curl` is held until the service is up.
+To demo the Python backend on the free tier, wake it first by opening
+`https://<this-service>.onrender.com/meta` (or `curl` it), then use the site. Next.js degrades politely
+while the backend is asleep (a `503` from its JSON API, an amber "waking up" message on the form and
+dashboard) but cannot wake it itself. (An earlier design pinged the backend from a Next.js startup hook
+so the two would wake together; that was removed because server-to-server requests don't wake it.)
+
+- **Don't try to keep everything awake.** A free workspace gets about 750 instance-hours a month. One
   always-on service uses about 730; two would run out mid-month.
 - `LINK_BACKEND=local` needs no second service at all.
 
